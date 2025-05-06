@@ -36,9 +36,9 @@ def scrape_doctolib(params):
         
         print(f"Navigating directly to search URL: {search_url}")
         driver.get(search_url)
-        time.sleep(3)  # Wait for page to load
+        time.sleep(3) 
         
-        # Accept cookies if popup appears
+        
         try:
             cookie_button = wait.until(
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Accepter') or contains(text(), 'accepter')]")),
@@ -49,7 +49,7 @@ def scrape_doctolib(params):
         except:
             print("No cookies popup found or already accepted")
             
-        # Wait for search results to load
+       
         try:
             total_results = wait.until(EC.presence_of_element_located(
                 (By.CSS_SELECTOR, "div[data-test='total-number-of-results']")
@@ -96,7 +96,7 @@ def scrape_doctolib(params):
             try:
                 print(f"Visiting doctor {i+1} at URL: {url}")
                 driver.get(url)
-                time.sleep(2)  # Wait for page to load
+                time.sleep(2) 
 
                 doctor_info = {
                     "name": "Unknown",
@@ -127,7 +127,7 @@ def scrape_doctolib(params):
 
                 # Address
                 try:
-                    address_element = driver.find_element(By.CSS_SELECTOR, "p.dl-profile-practice-name")
+                    address_element = driver.find_element(By.CSS_SELECTOR, "div.dl-profile-practice-name p")
                     
                     doctor_info["address"] = address_element.text.strip()
                 except:
@@ -206,14 +206,14 @@ def scrape_doctolib(params):
 
 def export_to_csv(doctors, specialty, location):
  
-    # Create data directory if it doesn't exist
+   
     data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
     os.makedirs(data_dir, exist_ok=True)
     
-    # Create DataFrame from doctors list
+   
     df = pd.DataFrame(doctors)
     
-    # Generate filename based on search parameters and timestamp
+   
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     filename = f"{specialty}_{location}_{timestamp}.csv"
     filepath = os.path.join(data_dir, filename)
