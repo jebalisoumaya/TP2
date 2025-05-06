@@ -6,96 +6,110 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 import time
+import pandas as pd
+import os
 
 def scrape_doctolib(params):
-    # Set up the WebDriver
+    # Set up the WebDriver with improved options
+    chrome_options = webdriver.ChromeOptions()
+    chrome_options.add_argument("--disable-gpu")  # Disable GPU hardware acceleration
+    chrome_options.add_argument("--disable-extensions")  # Disable extensions
+    chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])  # Disable logging
+    
     service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service)
+    driver = webdriver.Chrome(service=service, options=chrome_options)
     print("Script started...")
-    driver.get("https://www.doctolib.fr/")
-    print("Browser opened and navigated to Doctolib.")
-
-    wait = WebDriverWait(driver, 40)
-
-    # Enter the location
-    place_input = wait.until(
-        EC.element_to_be_clickable((By.CSS_SELECTOR, "input.searchbar-input.searchbar-place-input"))
-    )
-    place_input.clear()
-    place_input.send_keys(params.get("location", "75008"))
-
-    # Enter the occupation/query
-    query_input = wait.until(
-        EC.element_to_be_clickable((By.CSS_SELECTOR, "input.searchbar-input.searchbar-query-input"))
-    )
-    query_input.clear()
-    query_input.send_keys(params.get("query", "dermatologue"))
-    print("Query entered:", params.get("query", "dermatologue"))
-    time.sleep(1)
-
-    print("Location entered:", params.get("location", "75008"))
-
-    wait.until(
-        EC.text_to_be_present_in_element_value((By.CSS_SELECTOR,
-             "input.searchbar-input.searchbar-place-input"),
-             params.get("location", "75008"))
-    )
-    query_input.send_keys(Keys.ENTER)
-    place_input.send_keys(Keys.ENTER)
-
+    
+    wait = WebDriverWait(driver, 20)
+    
     try:
+        # Construct direct search URL instead of using the form
+        specialty = params.get("query", "medecin-generaliste")
+        location = params.get("location", "75008")
+        
+        # Format the URL - ensure the specialty and location are properly formatted
+        specialty = specialty.lower().replace(" ", "-")
+        location = location.replace(" ", "-")
+        
+        # Direct URL to search results
+        search_url = f"https://www.doctolib.fr/search?location={location}&speciality={specialty}"
+        
+        print(f"Navigating directly to search URL: {search_url}")
+        driver.get(search_url)
+        time.sleep(3)  # Wait for page to load
+        
+        # Accept cookies if popup appears
+        try:
+            cookie_button = wait.until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Accepter') or contains(text(), 'accepter')]")),
+                timeout=5
+            )
+            cookie_button.click()
+            print("Accepted cookies")
+        except:
+            print("No cookies popup found or already accepted")
+            
         # Wait for search results to load
-        total_results = wait.until(EC.presence_of_element_located(
-            (By.CSS_SELECTOR, "div[data-test='total-number-of-results']")
-        ))
-        print("Found results:", total_results.text)
+        try:
+            total_results = wait.until(EC.presence_of_element_located(
+                (By.CSS_SELECTOR, "div[data-test='total-number-of-results']")
+            ))
+            print(f"Found results: {total_results.text}")
+        except:
+            print("Could not find total results element, but continuing...")
 
-        # Store search results URL to return to after visiting each doctor
-        search_results_url = driver.current_url
-        print(f"Search results URL: {search_results_url}")
+        # Get links to doctor profiles
+        doctor_links = []
+        try:
+            # Wait for cards to appear
+            cards = wait.until(EC.presence_of_all_elements_located(
+                (By.CSS_SELECTOR, "div.dl-search-result, div.dl-card-content")
+            ))
+            
+            print(f"Found {len(cards)} doctor cards")
+            
+            # Process first 10 cards (or fewer if there aren't that many)
+            max_doctors = min(22, len(cards))
+            
+            for card in cards[:max_doctors]:
+                try:
+                    # Try to find link with more specific XPath or CSS selector
+                    link_element = card.find_element(By.CSS_SELECTOR, "a[href*='/']")
+                    link = link_element.get_attribute("href")
+                    if link and ("/medecin" in link or "/dentiste" in link or "/sage-femme" in link 
+                               or link.startswith("https://www.doctolib.fr/")):
+                        doctor_links.append(link)
+                        print(f"Found doctor link: {link}")
+                except Exception as link_error:
+                    print(f"Error finding link in card: {link_error}")
+                    continue
+            
+            print(f"Collected {len(doctor_links)} doctor links to visit")
+            
+        except Exception as cards_error:
+            print(f"Error finding doctor cards: {cards_error}")
+            return []
 
-        # Get all doctor cards/links from the search results page
-        doctor_cards = wait.until(EC.presence_of_all_elements_located(
-            (By.CSS_SELECTOR, "div.dl-search-result, div.dl-card-content")
-        ))
-
-        print(f"Found {len(doctor_cards)} doctor cards to process")
-
-        # Collect doctor URLs first to avoid stale element references
-        doctor_urls = []
-        for i, card in enumerate(doctor_cards[:10]):  # Limit to first 10 for testing
-            try:
-                link_element = card.find_element(By.CSS_SELECTOR, "a[href*='/']")
-                doctor_url = link_element.get_attribute("href")
-                if doctor_url:
-                    doctor_urls.append((i, doctor_url))
-            except Exception as e:
-                print(f"Error getting URL for doctor card {i+1}: {e}")
-
-        print(f"Collected {len(doctor_urls)} doctor URLs to visit")
-
-        # Now process each doctor by visiting their page
+        # Now scrape each doctor profile
         doctors = []
-        for index, url in doctor_urls:
+        for i, url in enumerate(doctor_links):
             try:
-                print(f"Visiting doctor {index+1} at URL: {url}")
+                print(f"Visiting doctor {i+1} at URL: {url}")
                 driver.get(url)
-
-                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "body")))
-                time.sleep(2)
+                time.sleep(2)  # Wait for page to load
 
                 doctor_info = {
                     "name": "Unknown",
                     "specialty": "Unknown",
                     "address": "Unknown",
                     "availability": "Unknown",
-                    "phone": "Unknown",
-                    "biography": "Unknown"
+                    "tarif": "Unknown",
+                    "convention": "Unknown"
                 }
 
                 # Name
                 try:
-                    name_element = driver.find_element(By.CSS_SELECTOR, "h1.dl-profile-header-name, h1.dl-text")
+                    name_element = driver.find_element(By.CSS_SELECTOR, "h1.dl-profile-header-name, h2.dl-text")
                     doctor_info["name"] = name_element.text.strip()
                 except:
                     try:
@@ -113,28 +127,32 @@ def scrape_doctolib(params):
 
                 # Address
                 try:
-                    address_element = driver.find_element(By.CSS_SELECTOR, "div.dl-profile-text-address")
+                    address_element = driver.find_element(By.CSS_SELECTOR, "p.dl-profile-practice-name")
+                    
                     doctor_info["address"] = address_element.text.strip()
                 except:
                     try:
                         address_element = driver.find_element(By.CSS_SELECTOR, "div.dl-profile-practice-address")
                         doctor_info["address"] = address_element.text.strip()
-                    except Exception as address_error:
-                        print(f"Error extracting address: {address_error}")
-
-                # Phone
-                try:
-                    phone_element = driver.find_element(By.CSS_SELECTOR, "div.dl-profile-text-phone")
-                    doctor_info["phone"] = phone_element.text.strip()
-                except Exception as phone_error:
-                    print(f"No phone number found or error: {phone_error}")
-
-                # Biography
-                try:
-                    bio_element = driver.find_element(By.CSS_SELECTOR, "div.dl-profile-text-bio")
-                    doctor_info["biography"] = bio_element.text.strip()
-                except Exception as bio_error:
-                    print(f"No biography found or error: {bio_error}")
+                    except:
+                        try:
+                            # Look for address in location info 
+                            address_element = driver.find_element(By.CSS_SELECTOR, ".dl-profile-location-address")
+                            doctor_info["address"] = address_element.text.strip()
+                        except:
+                            try:
+                                # Try to find any element containing address information by broader search
+                                address_elements = driver.find_elements(By.XPATH, 
+                                    "//*[contains(@class, 'address') or contains(@class, 'location')]")
+                                
+                                if address_elements:
+                                    for elem in address_elements:
+                                        text = elem.text.strip()
+                                        if text and any(s in text.lower() for s in ["rue", "avenue", "boulevard", "place"]):
+                                            doctor_info["address"] = text
+                                            break
+                            except Exception as address_error:
+                                print(f"Error extracting address: {address_error}")
 
                 # Availability
                 try:
@@ -146,23 +164,32 @@ def scrape_doctolib(params):
                         doctor_info["availability"] = avail_element.text.strip()
                     except Exception as avail_error:
                         print(f"Error extracting availability: {avail_error}")
+                        
+                # Tarif (Price)
+                try:
+                    tarif_element = driver.find_element(By.CSS_SELECTOR, ".dl-profile-fee")
+                    doctor_info["tarif"] = tarif_element.text.strip()
+                except Exception as tarif_error:
+                    print(f"Error extracting tarif: {tarif_error}")
+                    
+                # Convention type
+                try:
+                    convention_element = driver.find_element(By.CSS_SELECTOR, "div.dl-profile-text p")
+                    doctor_info["convention"] = convention_element.text.strip()
+                except Exception as convention_error:
+                    print(f"Error extracting convention: {convention_error}")
 
                 doctors.append(doctor_info)
-                print(f"Successfully scraped doctor {index+1}: {doctor_info['name']}")
-
-                driver.get(search_results_url)
-                wait.until(EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, "div[data-test='total-number-of-results']")
-                ))
-
+                print(f"Successfully scraped doctor {i+1}: {doctor_info['name']}")
+                
             except Exception as visit_error:
-                print(f"Error processing doctor {index+1}: {visit_error}")
-                driver.get(search_results_url)
-                wait.until(EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, "div[data-test='total-number-of-results']")
-                ))
+                print(f"Error processing doctor {i+1}: {visit_error}")
 
         print(f"\nSuccessfully scraped {len(doctors)} doctors")
+        
+        # Export results to CSV
+        export_to_csv(doctors, specialty, location)
+        
         return doctors
 
     except Exception as e:
@@ -171,4 +198,27 @@ def scrape_doctolib(params):
         return []
 
     finally:
-        driver.quit()
+        try:
+            driver.quit()
+            print("Browser closed")
+        except:
+            print("Error closing browser")
+
+def export_to_csv(doctors, specialty, location):
+ 
+    # Create data directory if it doesn't exist
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+    os.makedirs(data_dir, exist_ok=True)
+    
+    # Create DataFrame from doctors list
+    df = pd.DataFrame(doctors)
+    
+    # Generate filename based on search parameters and timestamp
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    filename = f"{specialty}_{location}_{timestamp}.csv"
+    filepath = os.path.join(data_dir, filename)
+    
+    # Export to CSV
+    df.to_csv(filepath, index=False, encoding='utf-8-sig')
+    
+    print(f"Results exported to: {filepath}")
